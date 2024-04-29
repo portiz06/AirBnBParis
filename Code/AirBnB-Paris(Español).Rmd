@@ -1,0 +1,688 @@
+---
+title: 'Analisis de propiedeades de AirBnB en Paris'
+author: "Ortiz, Pedro"
+date: "2022-12-02"
+output: 
+  html_document:
+    theme: 
+      bootswatch: flatly
+---
+
+Para comenzar, importaremos las librerias requeridas para este notebook y dejaremos seteado el tema para todos los graficos que utilizan ggplot, asi dejando un criterio establecido de antemano para esto.
+
+```{r Importar librerias, warning=F, message=F}
+require(tidyverse)
+require(dplyr)
+require(GGally)
+require(patchwork)
+require(leaflet)
+require(leafpop)
+require(modeest)
+require(class)
+require(rpart)
+require(rpart.plot)
+require(rmarkdown)
+theme_set(theme_minimal())
+```
+
+
+# Importacion y filtrado de datos
+
+## Acerca del dataset
+
+El dataset elegido para trabajar fue el de Inside AirBnB de Paris. Para aquellos lectores que no conozcan AirBnB, es una pagina web o aplicacion que permite alojamientos temporales mediante alquileres por dia de viviendas, cuartos o departamentos, principalmente con un fin turistico, en distintas ciudades del mundo.  
+Volviendo a lo que es el dataset, este posee una observacion por cada propiedad activa en esta aplicacion, con distintas caracteristicas de la misma, tales como distinciones subjetivas (reviews, comentarios o descripciones), objetivas (precio por noche, cantidad de camas o cantidad de baños), locacionales (barrio, latitud o longitud) o caracteristicas del propietario o host (superhost, porcentaje de respuesta del host,cantidad de propiedades del mismo o identidad verificada). Una vez descripto el dataset, podemos proceder con la descarga y filtrado del mismo.
+
+## Descarga del dataset
+
+Descargamos el dataset desde (http://insideairbnb.com/get-the-data) y para comenzar a entender nuestro dataset vemos las primeras observaciones. Cabe aclarar que el significado de cada columna, y los posibles valores que pudiesen llegar a tomar estan detallados aqui (https://docs.google.com/spreadsheets/d/1iWCNJcSutYqpULSQHlNyGInUvHg2BoUGoNRIGa6Szc4/edit#gid=1322284596). En base a los detalles aportados por este documento, la cantidad total de observaciones, y las variables pensadas de antemano para trabajar con este dataset filtramos el mismo
+
+```{r Descargar los datos originales, message=F}
+#Datos originales
+datos1 <- read_csv("listings.csv")
+```
+
+
+```{r Ver los datos originales}
+paged_table(head(datos1,3))
+
+```
+
+Como podemos apreciar hay innumerables columnas con datos que no consideramos relevantes para el analisis, al menos con el analisis que se pretende lograr, como son picture_url, listing_url, description o amenities.
+
+## Filtrado de los datos
+
+Para nuestro filtrado seleccionamos distintas variables, y modificamos otras para lograr que posean un tipo manejable por R y por nosotros, como por ejemplo el pasaje de precios desde characters hacia numeric, o  separar la variable de baños en 2, indicando por un lado cantidad y por otro tipo de baño. Tambien eliminamos aquellas propiedades que poseian datos vacios, con el proposito de tener un dataset lo mas limpio y consistente posible
+
+```{r Filtrar los datos, warning=F}
+#1er filtrado
+datos1$host_response_rate <- as.numeric(str_remove(datos1$host_response_rate, "%"))  
+datos1$host_acceptance_rate <- as.numeric(str_remove(datos1$host_acceptance_rate, "%")) 
+datos1$price <- as.numeric(substring(datos1$price, 2)) 
+
+
+#2do filtrado
+datos2 <- datos1 %>% select(id, host_id, host_response_rate,host_acceptance_rate, host_is_superhost, host_has_profile_pic, host_identity_verified, neighbourhood_cleansed, latitude, longitude, room_type, accommodates, bathrooms_text, beds, price, minimum_nights, maximum_nights, has_availability, number_of_reviews, number_of_reviews_ltm, first_review, review_scores_rating, instant_bookable, reviews_per_month ) %>%  na.omit()
+
+
+
+#3er filtrado
+datos2$bathrooms_text <- str_replace(datos2$bathrooms_text , "Shared half-bath", "0.5 shared bath") 
+datos2$bathrooms_text <-str_replace(datos2$bathrooms_text , "Private half-bath", "0.5 private bath") 
+datos2$bathrooms_text <- str_replace(datos2$bathrooms_text , "Half-bath", "0.5 bath")
+datos2$bathrooms_text <- str_replace(datos2$bathrooms_text , "baths", "bath")
+datos2[c("cant_bath","tipo_bath")] <- str_split(datos2$bathrooms_text, " ", n = 2, simplify = T)
+datos2$cant_bath <- as.numeric(datos2$cant_bath )
+datos2 <- datos2 %>% select(-bathrooms_text)
+
+
+```
+
+Una vez hecho esto, procederemos a cambiar los nombres de las columnas a español, con el objetivo de tener una mejor legibilidad y prolijidad en el codigo, ademas de volver a filtrar por aquellas propiedades que estan disponibles para alquilar al momento de creacion del dataset (22/09/2022), y nos quedaremos con aquellas propiedades que posean mas de 10 reviews, y al menos 5 en el ultimo año, para tener datos mas actuales, y mas consistentes a la hora de trazar comparaciones o buscar modelos predictivos.
+
+```{r Nombres de columnas a español}
+datos3 <- datos2 %>% filter(number_of_reviews > 10 & number_of_reviews_ltm > 5, has_availability == T) %>% select(-has_availability)
+datos3 <- datos3 %>% rename(porcentaje_aceptados = host_acceptance_rate,porcentaje_respuestas  = host_response_rate, superhost = host_is_superhost, foto_perfil = host_has_profile_pic, identidad_verificada = host_identity_verified, barrio = neighbourhood_cleansed, tipo_cuarto = room_type, ocupantes = accommodates, camas = beds, precio = price, noches_minimas = minimum_nights, noches_maximas = maximum_nights, cant_reviews = number_of_reviews, cant_reviews_año = number_of_reviews_ltm, primer_review = first_review, promedio_review = review_scores_rating, reviews_por_mes = reviews_per_month, instantaneo = instant_bookable)
+```
+
+Ahora terminado el filtrado de los datos, veremos como cambiaron las dimensiones del dataset
+
+```{r Dimensiones del dataset}
+dimensiones <- matrix (NA, nrow = 3, ncol = 2)
+dimensiones[1,] <- dim(datos1)
+dimensiones[2,] <- dim(datos2)
+dimensiones[3,] <- dim(datos3)
+
+colnames(dimensiones) <- c("Observaciones", "Variables")
+rownames(dimensiones) <- c("Datos iniciales", "A mitad de filtrar", "Datos finales")
+dimensiones
+```
+
+Podemos ver que redujimos nuestro dataset en mas de un 75% en cuanto a las observaciones, y unicamente tomamos un tercio de las variables, que consideramos relevantes a la hora de realizar un analisis de los datos.
+
+# Analisis exploratorio de los datos
+
+Con el proposito de comprender mejor nuestro dataset, las distribuciones que poseen las distintas variables, las relaciones que pueden existir entre las mismas, y como nos pueden ayudar a generar mejores modelos lineales o clasificaciones realizaremos una exploracion de los datos, presentando este analisis mediante distintos graficos, y obteniendo conclusiones a partir de los mismos.
+
+## Analizamos las variables por separado
+
+Pasando al analisis exploratorio de datos, veremos para comenzar como se distribuyen las variables en relacion a la cantidad total de propiedades 
+
+En un principio veremos aquellas variables que son dicotomicas, es decir, que solo tienen dos factores.
+
+```{r Variables dicotomicas}
+datos_host <- datos3 %>%gather(key = "categoria" , value = "VoF", c(superhost,foto_perfil,identidad_verificada,instantaneo)) 
+
+datos_host %>% ggplot(aes(x = categoria, fill = VoF)) + geom_bar(position = "dodge", width=0.5) + labs(y = "N° de observaciones", x = "", fill = "", title = "Variables dicotómicas") + geom_text(aes(label = ..count..), stat = "count", color = "black",position = position_dodge(width = 0.5), vjust = -0.5) + scale_x_discrete(labels = c("foto_perfil" = "Foto de perfil", "identidad_verificada" = "Identidad verificada", "superhost" = "Superhost","instantaneo" = "Alquilable instantaneamente")) + scale_fill_manual(values=c("snow4", "tan2"), labels = c("No", "Sí"))
+
+```
+
+Podemos apreciar aqui, que en dos de ellas, foto de perfil e identidad verificada, la gran mayoria de las observaciones del dataset son si, es decir, la gran mayoria de propiedades poseen dueños con foto de perfil e identidad verificada, mientras que en el caso de si es alquilable instantaneamente o si el host es superhost o no, se puede ver una mayor paridad, pero donde gana el no. Esto es un dato a tener en cuenta, sobre todo si queremos realizar una clasificacion de estas categorias en base al resto de variables, ya que sera preferible quedarse con aquellas que posean una mayor paridad, para asi poder sacarle mas jugo a la clasificacion segun los distintos modelos.
+
+Una vez terminado el analisis de las variables dicotomicas pasaremos al estudio de aquellas categoricas, como el barrio o el tipo de baño.
+
+```{r Barrios}
+datos_barrio <- as.data.frame(table(datos3$barrio)) %>% rename(barrio = Var1, cantidad = Freq)
+
+datos_barrio %>% ggplot(aes(x = reorder(barrio,cantidad), y = cantidad)) + geom_col(fill = "palevioletred1") + coord_flip() + geom_text(aes(label = cantidad), vjust = 0.5, hjust = 1.5, color = "black", size = 2.5) + labs(y = "N° de observaciones", x = "Barrio", title = "Distribución de propiedades según el barrio")
+```
+
+En este caso podemos observar una distribucion un tanto pareja de las propiedades segun el barrio donde estan ubicadas, donde el barrio donde menos propiedades se ubican (Palais-Bourbon), de las presentes en nuestro dataset, posee aproximadamente un 25 % de observaciones con respecto a aquel barrio que mas propiedades tiene (Buttes-Montmartre). Esto se puede apreciar de mejor manera viendo el siguiente mapa de Paris, donde las propiedades se encuentran coloreadas segun el barrio. 
+
+```{r Mapa- Variables espaciales}
+colores <- c('forestgreen', 'cornflowerblue', 'magenta', 'darkolivegreen4', 'indianred1', 'tan4', 'darkblue', 
+                'mediumorchid1','firebrick4',  'yellowgreen', 'lightsalmon', 'tan3','darkgray', 'wheat4', '#DDAD4B', 'chartreuse', 
+                'cadetblue1',"darkolivegreen1", "#7CE3D8","gainsboro")
+pal <- colorFactor(palette = colores, domain = datos3$barrio)
+leaflet(datos3) %>% addProviderTiles(provider = providers$CartoDB.Positron) %>% addCircleMarkers(lng = datos3$longitude, lat = datos3$latitude, radius = 8
+                                 ,stroke = FALSE,fillOpacity = 0.5, 
+                                 fillColor =  ~pal(barrio) ,          
+                                 popup = ~leafpop::popupTable(datos3,
+                                       zcol = c("precio", "promedio_review", "ocupantes"),
+                                       row.numbers = FALSE, feature.id = FALSE)) %>%   addLegend(position = "bottomright", pal = pal, values = ~barrio, opacity = 1)
+```
+
+Siguiendo con el analisis de las variables categoricas, pasaremos a observar como se distribuyen las propiedades segun su tipo de cuarto publicitado.
+
+```{r Tipo de cuartos}
+datos3 %>% ggplot(aes(x = tipo_cuarto, fill = tipo_cuarto)) + geom_bar() + scale_x_discrete(labels = c("Entire home/apt" = "", "Hotel room" = "", "Private room" = "", "Shared room" = "")) + labs(x = "Tipo de cuarto ", y = "N° de observaciones", fill = "", title = "Distribución de propiedades según tipo de cuarto") + scale_fill_hue(labels = c("Apartamento", "Hotel", "Privado", "Compartido")) + geom_text(aes(label = ..count..), stat = "count", vjust = -0.5, hjust = 0.5, color = "black")
+
+```
+
+Aqui se puede apreciar claramente que la inmensa mayoria de propiedades de AirBnB son apartamentos, mientras que listados como privados hay un poco menos de 2000, y hoteles o compartidos menos de 200 y 100 respectivamente. Esto concuerda con el proposito de la app, donde la gente busca un lugar para vacacionar o turistear, y se prefieren lugares privados para descansar y estar esos dias a lugares compartidos. Por otro lado, es de esperar que los hoteles no publiciten todos sus cuartos aqui, ya que poseen gran variedad, y puede que no les sea conveniente que los clientes vean sus distintos tipos de cuarto por separado.  
+
+Ahora veremos la distribucion de propiedades segun la cantidad de ocupantes maxima propuesta por su host o dueño:
+
+```{r}
+#Histograma de ocupantes
+
+datos3 %>% ggplot(aes(x = ocupantes), xaxp = c(1,15,15)) + geom_bar(fill = "palevioletred1") + labs(y = "Cantidad", title = "Distribución de ocupantes", x = "Ocupantes") + geom_text(aes(label = ..count..), stat = "count", vjust = -0.5, hjust = 0.5, color = "black") + scale_x_continuous(breaks = seq(1:16))
+```
+
+Claramente se puede observar una tendencia donde la mayor cantidad de propiedades tienen entre 1 y 4 ocupantes, mientras que parece haber un segundo "pico" en 6 ocupantes. Esto es concordante con la realidad, donde la gran mayoria de la gente planea las vacaciones con su familia, generalmente de 6 o menos integrantes, en cambio, es menos comun, vacaciones con mas de 9 o 10 acompañantes, por lo que existen menos propiedades con esa capacidad maxima.  
+
+Para finalizar con el analisis exploratorio de las variables por separado, veremos aquellas que son continuas tales como el precio de la propiedad, o el promedio de las reviews que le dieron las personas que alquilaron esas propiedades:
+
+
+```{r Datos continuos, include=F}
+datos_continuos <- datos3 %>% select(precio, ocupantes,cant_reviews, promedio_review, cant_bath,camas, superhost) %>% filter(cant_bath < 50) %>% rename(Precio = precio, Ocupantes = ocupantes, Cant_reseñas = cant_reviews, Calificacion = promedio_review, Cant_baños = cant_bath, Camas = camas) %>% mutate(superhost = str_replace(superhost, 'FALSE', 'Host'), superhost = str_replace(superhost, 'TRUE', 'Superhost')) 
+```
+
+```{r Precios}
+
+prom_precio <- mean(datos_continuos$Precio)
+cuantiles_precio <- quantile(datos_continuos$Precio, c(0.25,0.5,0.75), type = 6)
+
+g1 <- datos_continuos %>% ggplot(aes(x = Precio)) + geom_histogram(binwidth=10, aes(fill=..count..), col='black') + labs(x = "Precio (€)", y = "Cantidad", fill = "Cantidad") + geom_vline(xintercept = prom_precio, col = "orangered1", lwd = 1.3) + geom_text(aes(x = 220, y = 750, label = as.character(round(prom_precio,2))),stat = "unique", size = 4)
+
+g2 <- datos_continuos %>% ggplot(aes(x = Precio)) + geom_boxplot(fill = "burlywood1") + labs(x = "Precio (€)", y = "") + geom_text(aes(x = 82, y = 0.5, label = "82"),stat = "unique", size = 2.5) + geom_text(aes(x = 120, y = 0.5, label = "120"),stat = "unique", size = 2.5) + geom_text(aes(x = 200, y = 0.5, label = "200"),stat = "unique", size = 2.5) + theme(axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+g1 + g2 + plot_layout(nrow = 2, heights = c(2, 1))
+```
+
+En este grafico podemos observar como se distribuye el precio de las propiedades aqui presentes, donde se observa claramente que la gran mayoria de propiedades tiene un precio menor a 200€ la noche, y la mitad de propiedades posee un precio menor o igual a 120€ la noche, sin embargo vemos que el promedio es mayor a este numero, ya que es de 165,33€, debido a que aquellas propiedades con precios extremadamente altos por noche, hacen que el promedio suba, debido a que no es una metrica robusta.  
+
+Para finalizar analizaremos la calificaciones dadas por los usuarios a las propiedades:
+
+
+```{r Calificaciones}
+prom_calificacion <- mean(datos_continuos$Calificacion)
+datos_continuos %>% ggplot(aes(x = Calificacion)) + geom_histogram(binwidth=0.05, aes(fill=..count..), col='black') + labs(x = "Calificacion", y = "Cantidad", fill = "Cantidad", title = "Distribución de las propiedades según la calificación") + geom_vline(xintercept = prom_calificacion, col = "orangered1", lwd = 1.1) + geom_text(aes(x = 4.815, y = 1750, label = as.character(round(prom_calificacion,2))),stat = "unique", size = 4) + scale_fill_gradient(low='#FF3E96', high='slateblue3')
+```
+
+Claramente se puede observar que casi todas las observaciones poseen un promedio de reviews mayor a 4 estrellitas de 5, lo que nos lleva a pensar a que se puede deber esto, ¿sera que todas las propiedades son extremadamente buenas?, ¿sera que los usuarios de AirBnB son muy benevolos con sus calificaciones?, ¿habra influido el criterio de filtrado, donde se escogio a aquellas propiedades con mas de 10 reviews totales, y mas de 5 en el ultimo año?.  
+En cuanto a las primeras dos preguntas, con los datos presentes en el dataset, y el analisis realizado (sin procesamiento del lenguaje natural), no es posible responderlas, mientras que la tercera si tiene respuesta, y es que si, el criterio utilizado influyó, ya que existen propiedades con muy pocas calificaciones, y malas, lo que genera un loop negativo, donde los usuarios no las eligen ya que no tienen buenas calificaciones, entonces no tienen posiblidad de subir ese promedio, ni tienen un mayor numero de reviews, por lo que finalmente no entran en el analisis.
+
+## Relaciones entre variables
+
+A continuación se buscan correlaciones entre las variables del dataset. Principalmente se buscan relaciones entre el precio y otras variables dataset pero además se agregan todas las relaciones entre las demás variables entre si pues puede ser un dato interesante a tener en cuenta a la hora de hacer un modelado o a la hora de clasificar (con este sentido además se separan los puntos en dos colores dependiendo de si se trata de un superhost o siplemente un host, esto resultará muy útil más adelante en el trabajo).  
+Para comenzar trabajaremos con variables ya seleccionadas (precio, ocupantes,cantidad reviews, promedio de las review, cantidad de baños,camas y superhost), debido a que son las que intuimos que seran mas influyentes a la hora de realizar distintos modelos, o poseen alguna relacion entre si.  
+Veremos un "supergrafico",separando como ya dijimos en host o superhost, del cual extraeremos aquellos que nos resulten mas interesantes, para realizar conclusiones.
+
+```{r Grafico de relaciones, message=F}
+g3 <- datos_continuos %>% select(-superhost) %>%  ggpairs(aes(color = datos_continuos$superhost, alpha = 0.5), upper = list(continuous = wrap("cor", size = 2.5))) + theme_bw()
+g3
+```
+
+
+El primer grafico que veremos sera el de la calificacion, en funcion si el dueño es host o superhost
+
+```{r Calificaciones- host vs superhost}
+#Histograma calificaciones
+
+datos_continuos %>% filter(Calificacion > 3.5) %>% ggplot(aes(x = Calificacion)) + geom_density(aes(fill = superhost) , lwd = 0.5, alpha = 0.5) + labs(x = "Calificacion", y = "Densidad", fill = "", title = "Distribución de calificaciones según el tipo de host") + scale_fill_hue(labels = c("Host", "Superhost"))  + geom_vline(xintercept = median(datos_continuos$Calificacion), lwd = 1.2) + geom_text(aes(x = 4.84, y = 4, label = "4.78"),stat = "unique", size = 4)
+```
+
+Aqui podemos volver a notar como las calificaciones son extremadamente positivas, tanto para los host como para los superhost, pero tambien se puede ver que dentro de este extremo positivismo, hay incluso una mayor calificacion para aquellas con un superhost como dueño, ya que se observa el pico del super host, mayor a la mediana de los promedios (4,78), mientras que el de los host es "unicamente" mayor a 4,5, pero menor a 4,78.   
+
+Del "supergrafico" visto anteriormente tambien podemos extraer para su analisis individual el de ocupantes en funcion del precio de la propiedad, pero lo hacemos dividido en dos graficos, uno para aquellos superhost, y otros para los host unicamente.
+
+```{r Ocupantes vs precio}
+g4 <- datos_continuos %>% filter(superhost == "Superhost") %>%  ggplot(aes(x = Precio, y = Ocupantes))  + labs(x = "Precio (€)", y = "Ocupantes", title = "Solo superhost") + geom_jitter(col = "#FFA500", alpha = 0.5)
+g5 <- datos_continuos %>% filter(superhost == "Host") %>%   ggplot(aes(x = Precio, y = Ocupantes))  + labs(x = "Precio (€)", y = "Ocupantes", title = "Solo host") + geom_jitter(col = "#FFA500", alpha = 0.5)
+g4 + g5
+```
+
+Se puede apreciar un patron similar en ambos, con la unica diferencia que se puede notar, que existen mas host que superhost, donde esto genera mayor cantidad de propiedades en menos de 7 ocupantes y menos de 350 euros por noche. En ambos vemos que el precio parece crecer a medida que aumentan la cantidad de ocupantes, pero no parece que este crecimiento fuera tan pronunciado como uno podria esperar.  
+
+Ahora pasaremos a relacionar ocupantes con camas, donde a priori, se puede pensar que estan totalmente relacionados, como lo son la relacion entre ocupantes y camas, y entre cantidad de baños y camas
+
+```{r Ocupantes vs camas}
+#Graficos con mas correlacion
+
+datos_continuos %>% ggplot(aes(x= Ocupantes, y= Camas) ) + geom_jitter(col = "#FFA500", alpha = 0.5)
+```
+
+Vemos que claramente se puede notar una relacion de dependencia entre los ocupantes y las camas, ya que a medida que uno crece, el otro tambien lo hace, lo cual tiene sentido. Notar que esta relacion no suele ser 1 a 1 debido a que existen camas de mas de una plaza, o distintos sofa camas, que pueden alterar la relacion de identidad entre camas y ocupantes
+
+
+```{r Cant baños vs camas}
+datos_continuos %>% filter(Cant_baños < 50) %>% ggplot(aes(x = Cant_baños, y = Camas)) + geom_jitter(col = "#FFA500", alpha = 0.5) + scale_x_continuous(breaks = seq(0, 8, 0.5)) + xlab("Cantidad de baños")
+```
+
+Aqui vemos que no se cumple la relacion que uno podria pensar, donde a mas camas, mas baños, esto se aprecia en que la mayor cantidad de propiedades poseen entre 1 y 2 baños, independientemente de la cantidad de camas, tambien hay que notar que a medida que hay mas baños en la propiedad hay mas camas como limite inferior, pero el limite superior no aumenta en relacion a aquellas con 1 baño o 2.  
+
+Cabe destacar que en estos ultimos tres graficos presentados no se usaron los puntos exactos, pues sino no se aprecia bien la cantidad de los mismos, sino que se uso la funcion geom_jitter, que agrega un poco de ruido a los mismos, permitiendo distinguir aquellos que tienen las mismas coordenadas.  
+
+Por ultimo, observaremos la relacion de nuestras variables temporales y espaciales con el precio de la propiedad a alquilar, comenzaremos con la variable temporal (fecha de primer reseña):
+
+
+```{r Grafico de primer review}
+datos3 %>% ggplot(aes(x = primer_review, y = precio)) + geom_point(col = "#FF82AB",alpha = 0.5)  + labs(title = "Fecha de primer reseña y precio",x = "Fecha de primer review", y = "Precio (€)") + scale_x_date(date_breaks = "1 year",date_labels = "%Y") 
+```
+
+Vemos que una vez que se estabilizan la cantidad de primeras reviews durante el tiempo, no se nota un mayor aumento en los precios de las propiedades, sin embargo, previamente a esto, si se puede apreciar una tendencia creciente, por lo que a la hora de una posible prediccion del precio, es posible que la variable temporal no aporte en gran medida. Como punto extra se destaca la pandemia de COVID-19, y la cuarentena total por marzo, abril de 2020, notada en este grafico como el unico hueco apreciable a traves del tiempo, en principios de 2020.  
+
+Para finalizar nuestro analisis de las relaciones entre variables veremos como interactua la variable espacial, en este caso vista desde latitud y longitud con el precio, aunque para este caso en especifico, lo estandarizamos, es decir tomamos el precio por ocupante de las propiedades, y lo separamos en barato o caro, dependiendo si esta por debajo o por encima de la mediana para cada observacion en especifico. El tomar la mediana genera una division del 50% del dataset en barato, y el 50% en caro, a diferencia de lo que hubiese pasado si tomaramos el promedio.
+
+
+```{r Barato o caro- Mapa}
+
+datos_precio <- datos3 %>% mutate(precio_por_persona = precio/ocupantes ) %>% select(latitude,longitude,precio,precio_por_persona)
+med_precio_por_persona<- median(datos_precio$precio_por_persona)
+
+datos_precio <- datos_precio %>% mutate(categoria_precio = case_when(precio_por_persona > med_precio_por_persona ~ "caro",  precio_por_persona <= med_precio_por_persona ~ "barato"))
+
+colores_precio <- c("brown3","steelblue")
+pal_precio <- colorFactor(palette = colores_precio, domain = datos_precio$categoria_precio)
+leaflet(datos_precio) %>% addProviderTiles(provider = providers$CartoDB.Positron) %>% addCircleMarkers(lng = datos_precio$longitude, lat = datos_precio$latitude, radius = 8
+                                 ,stroke = FALSE,fillOpacity = 0.5, 
+                                 fillColor =  ~pal_precio(categoria_precio)) %>%   addLegend(position = "topright", pal = pal_precio, values = ~categoria_precio, opacity = 1)
+```
+
+Claramente se puede notar que aquellas propiedades que segun nuestro criterio son caras, se encuentran nucleadas en el centro de Paris, mientras que aquellas denotadas como baratas, se encuentran en mayor parte en la periferia. Obviamente hay excepciones a esto, pero en general se puede apreciar que la ubicacion de las propiedades influye a la hora del precio de la misma, al menos, si tomamos el precio por ocupante, esto lo tendremos en cuenta, y veremos mejor a la hora de modelar el precio de una propiedad
+
+# Modelado y ajuste lineal
+
+  A continuación vamos a intentar hacer un ajuste lineal de los datos que tenemos para predecir el precio de cada lugar para hospedarse. Se plantea desde antes de comenzar una serie de hipotesis sobre los datos que se intentarán verificar o refutar.
+En primer lugar puede que tenga sentido predecir el precio en función de disitntos tipos de variables. 
+
+-Por ejemplo se puede buscar una relación con las reviews de los usuarios para verificar si esto influye en el precio.
+
+-Por otro lado se pueden separar los ajustes según datos propios de cómo es el establecimiento y la ubicación del mismo para ver en cada uno como influye esto en el precio.
+
+-Por último podría ser interesante averiguar si combinando las mejores variables para predecir el precio de cada uno de estos ajustes se puede encontrar un único ajuste que es mejor a todos los demás.
+
+-Siguiendo esta lógica, parece tener sentido pensar que una propiedad que permite hospedaje desde una única noche tenga un mayor precio que una propiedad que solo permite hospedaje desde un mínimo de una semana y tal vez por este motivo haya una correlación imortante entre el precio y la cantidad minima de noches para hospedarse. Veremos si efectivamente este es el caso.
+
+```{r Ajustes}
+#ajuste lineal Precio (reviews, lat, long, host_acceptance_rate, barrio, minimun_nights, property type, camas, accomodates)
+Precios<-datos3$precio 
+ajuste_propio<-lm(Precios ~ datos3$noches_minimas + datos3$ocupantes + datos3$camas + datos3$tipo_bath + datos3$cant_bath)
+
+ajuste_reviews<-lm(Precios ~ datos3$promedio_review + datos3$reviews_por_mes + datos3$primer_review + datos3$cant_reviews )
+
+
+ajuste_ubicacion<-lm(Precios~datos3$latitude + datos3$longitude + datos3$barrio)
+
+```
+
+ Buscamos los mejores de cada uno. Para esto necesitamos una manera de medir el error.
+
+```{r Funciones}
+
+pmae_<-function(y, p){
+  return (mean(abs(y-p))/mean(y))
+}
+
+accuracy_<-function(x , y){
+  return( (sum(x==y)/length(y)) * 100 )
+}
+
+error_porcentual<-function(x,y){
+  return(100 - accuracy_(x,y))
+}
+
+crossval<- function(datos, ys, modelo_x, n_obs=round(0.2*nrow(datos)) , fun_error=pmae_ , n_muestras=10){
+  n<-nrow(datos)
+  errores<-c(1:n_muestras)
+  for (i in 1:n_muestras)
+  {
+    a_ajustar<-sample(c(1:nrow(datos)), nrow(datos)-n_obs, replace = F) 
+    ajus.cv<- lm(as.formula(paste( "precio ~", modelo_x, sep='')),data=datos[a_ajustar,]) #Generamos el ajuste, con las variables que querramos
+    predichos.oos<-predict(ajus.cv,newdata=datos) # Predecimos el precio de los demas datos  
+    # Función del error
+    errores[i]<-fun_error(ys[-a_ajustar], predichos.oos[-a_ajustar])
+  }
+  
+  return(mean(errores))
+}
+
+vector_a_color <- function(aux,pmae){
+  for (i in 1:length(aux)) {
+    if (aux[i] > pmae){
+      aux[i] <- "brown3"
+    } else {
+      aux[i] <- "steelblue"
+    }
+  }
+  return(aux)
+}
+
+
+```
+ 
+## Modelado segun variantes propias
+ 
+Ahora usamos estas funciones para ver cual es el mejor ajuste dentro de las variantes propias de una propiedad.
+
+```{r Variantes Propias}
+variantes_propias<-c( "ocupantes",  "noches_minimas", "cant_bath" , "camas", "ocupantes + cant_bath","tipo_bath + camas", "cant_bath + camas", "ocupantes + camas", "tipo_bath + ocupantes", "noches_minimas + ocupantes", "noches_minimas + cant_bath", "noches_minimas + camas", "noches_minimas + tipo_bath",  "noches_minimas + ocupantes + cant_bath", " noches_minimas + tipo_bath + camas", "noches_minimas + ocupantes + tipo_bath", "noches_minimas + camas + cant_bath","noches_minimas + ocupantes + cant_bath + tipo_bath + camas", "tipo_bath + ocupantes + camas", "tipo_bath + ocupantes + cant_bath"   )
+
+aux<-1:length(variantes_propias)
+
+for (i in 1:length(variantes_propias)) {
+  aux[i]<-crossval(datos3,Precios, variantes_propias[i])
+}
+
+variantes_propias[which.max(aux)]
+
+```
+
+Con este experimento parece que ya podemos refutar una de las hipótesis planteadas (por lo menos para este set de datos). El mayor error intentando predecir el precio es el que usa la variable de mínima cantidad de noches para hospedarse. Esto parece tener poco sentido en un primer momento pero buscando un poco más de información de como funciona la app se puede ver que la misma ya ofrece ciertos descuentos por hospedarse más de cierta cantidad de días. Es decir que si realmente hay un beneficio por quedarse mayor cantidad de días, esta información no se encuentra reflejada en este dataset, es algo que internamente maneja la app entre quienes ofrecen alojamiento y quienes se hospedan.
+
+```{r Errores variantes propias, warning=F}
+
+colores_propio <- vector_a_color(aux,0.45)
+data_frame(variantes_propias,aux) %>%  ggplot(mapping = aes(x = reorder(variantes_propias,aux), y = aux)) + geom_col( fill=colores_propio) + labs(x = "Variables", y = "PMAE", title = "PMAE segun variables propias" ) + scale_x_discrete(labels = function(x) str_wrap(x, width = 50)) + coord_flip() + geom_text(aes(label = round(aux,3)), nudge_y = - 0.05, col = "white")
+```
+
+En este gráfico se puede observar que cuando se utiliza la variable ocupantes el error en el ajuste disminuye notablemente. Esto mostraría que hay una correlación que se puede aproximar linealmente entre el precio y dicha variable. Pareciera además haber otro salto aunque más pequeño cuando se utiliza la variable camas y esto tiene sentido si observamos que hay una relación muy estrecha entre la variable camas y la variable ocupantes, como se menciono en la exploración del dataset. Por otro lado variables como cant_baños hacen aportes a la disminución del PMAE pero de manera muy poco significativa y depende en muchas ocasiones del conjunto aleatorio que se elije para hacer el crossvalidation.
+
+## Modelado segun variables subjetivas
+
+A continuación veremos los distintos ajustes lineales generados para el precio segun las distintas variables subjetivas presentes en el dataset, como promedio de reviews, o la cantidad de las mismas
+
+```{r Variantes subjetivas}
+variantes_subjetivas<-c(  "promedio_review", "reviews_por_mes", "primer_review" ,"cant_reviews",  " promedio_review +  reviews_por_mes +  primer_review + cant_reviews","promedio_review + cant_reviews", " primer_review + cant_reviews", "promedio_review +  reviews_por_mes ", "primer_review + promedio_review", "reviews_por_mes + cant_reviews", "promedio_review +  reviews_por_mes +  primer_review", "promedio_review +  reviews_por_mes + cant_reviews","promedio_review + primer_review  + cant_reviews" )
+
+aux<-1:length(variantes_subjetivas )
+
+for (i in 1:length(variantes_subjetivas )) {
+  aux[i]<-crossval(datos3,Precios, variantes_subjetivas [i])
+}
+
+
+data_frame(variantes_subjetivas,aux) %>% ggplot(mapping = aes(x = reorder(variantes_subjetivas,aux), y = aux)) + geom_col( fill="brown3") + labs(x = "Variables", y = "PMAE", title = "PMAE segun variables subjetivas" ) + scale_x_discrete(labels = function(x) str_wrap(x, width = 50)) + coord_flip() + geom_text(aes(label = round(aux,3)), nudge_y = - 0.05, col = "white")
+
+```
+En este caso ningún ajuste parece ser suficientemente bueno pues todos tienen un pmae mayor a 0.55. Esto refutaría otra de nuestras hipotesis pues sólo con este tipo de datos no se puede predecir el precio de los hospedajes de manera confiable. Sin embargo, por comparación se muestra que el tipo de datos que usaron antes sobre las caracteristicas propias del hospedaje tienen una mejor correlación con el precio del mismo.   
+
+
+Esto puede deberse a una infinidad de razones pero cabe destacar que si se observa el gráfico exploratorio de datos donde se ve la distribución de la calificación (promedio de las reviews), se puede ver que notablemente la mediana se encuentra en 4.78 y prácticamente no hay datos con un promedio de las reviews menor a 4. Esto muestra que claramente si hay una preferencia subjetiva a aumentar el precio en función de un mayor promedio de calificaciones este dataset nunca lo sabría pues no tiene datos de malas calificaciones. Es decir considera el peor tipo de calificación algo cercano a 4 lo cual para la gran mayoría es una muy buena calificación. Esto no quiere decir que efectivamente exista esta relación entre las reviews y el precio, únicmaente quiere decir que en este dataset no es posible encontrarla si existiera.  
+
+
+
+## Modelado segun variables de ubicacion
+
+Por último hacemos lo mismo para las variables locacionales, es decir, barrio, latitud  y longitud
+
+```{r Variantes ubicacion}
+variantes_ubicacion<-c( "latitude" , "longitude",  "barrio", " latitude +longitude ", "barrio + latitude" , "barrio + longitude" ,  " latitude +longitude + barrio"  )
+
+aux<-1:length(variantes_ubicacion )
+
+for (i in 1:length(variantes_ubicacion )) {
+  aux[i]<-crossval(datos3,Precios, variantes_ubicacion [i])
+}
+
+
+
+
+colores_ubicacion <- vector_a_color(aux,0.51)
+data_frame(variantes_ubicacion,aux) %>% ggplot(mapping = aes(x = reorder(variantes_ubicacion,aux), y = aux)) + geom_col( fill=colores_ubicacion) + labs(x = "Variables", y = "PMAE", title = "PMAE segun variables de ubicacion" ) + scale_x_discrete(labels = function(x) str_wrap(x, width = 25)) + coord_flip() + geom_text(aes(label = round(aux,3)), nudge_y = - 0.05, col = "white")
+```
+En este gráfico se aprecian los PMAES de los ajustes y se puede ver una línea azul que separa los ajustes sin utilizar la variable barrio de los que si la usan. En este caso nuevamente se puede ver un enorme salto en el PMAE mostrando que barrio es la que mas se relaciona con el precio dentro de estas variables. Sin embargo latitud y longitud, dos variables que literalmente definen a barrio parecen tener un mal ajuste del precio. ¿por qué será esto?  
+
+
+Si recordamos el gráfico del mapa dividiendo los hospedajes "baratos" de los "caros" podemos recordar que parecía una superficie de nivel de un paraboloide elíptico (parecían mas caros los del centro geográfico de la ciudad y mas baratos los de al rededor). Esto significa que para un ajuste lineal (una suerte de hiperplano en el espacio de las variables que se estan analizando), es muy difícil que aproxime la latitud y la longitud al precio. Por otro lado como barrio es categorica es una sección mas reducida de la latitud y la longitud donde se puede apreciar mejor si en ese entorno predomina un precio barato o uno caro (presenta similitudes con un trabajo de clasificación con vecinos más cercanos).  
+
+
+Luego entonces se hicieron ajustes utilizando la función poly() para darle 2 y hasta 3 grados de libertad a las variables latitud y longitud. Sin embargo si bien esto disminuye notablemente el PMAE, no llega a ser tan bueno como la variable barrio. Luego de esto seguir agregando grados de libertad a las variables para que ajustaran mejor parecía forzado e infructífero por lo que se decidió abandonar la idea.  
+
+
+
+## Modelado segun las mejores variables encontradas en las tres secciones anteriores
+
+Finalmente se intentará utilizar las mejores variables de cada tipo en conjunto para predecir lo mejor posible le precio en fnucion de los datos que tenemos.  
+
+
+
+```{r}
+variantes_todo<-c("tipo_bath + ocupantes + barrio + promedio_review ", "tipo_bath + ocupantes + barrio", "noches_minimas + tipo_bath + ocupantes + barrio + promedio_review", "ocupantes + barrio","noches_minimas + ocupantes + cant_bath + tipo_bath + camas + barrio + promedio_review", "latitude + longitude + camas + cant_bath + noches_minimas" )
+
+aux_todo<-1:length(variantes_todo )
+
+for (i in 1:length(variantes_todo )) {
+  aux_todo[i]<-crossval(datos3,Precios, variantes_todo [i])
+}
+
+
+colores_todo <- vector_a_color(aux_todo,0.42)
+data_frame(variantes_todo,aux_todo) %>%  ggplot(mapping = aes(x = reorder(variantes_todo,aux_todo), y = aux_todo)) + geom_col( fill=colores_todo) + labs(x = "Variables", y = "PMAE", title = "PMAE segun variables seleccionadas" ) + scale_x_discrete(labels = function(x) str_wrap(x, width = 25)) + coord_flip() + geom_text(aes(label = round(aux_todo,3)), nudge_y = - 0.05, col = "white")
+
+```
+
+## Analisis del mejor modelo obtenido
+
+Una vez conseguido el mejor modelo considerando distintas variables, y tomandolo segun el menor error cuadratico medio, procederemos a analizarlo
+
+```{r}
+variante_mejor_ajuste <- variantes_todo[which.min(aux_todo)]
+mejor_ajuste <- lm(as.formula(paste( "precio ~", variante_mejor_ajuste, sep='')),data=datos3)
+predichos <- predict(mejor_ajuste,datos3)
+ajuste_recta <- lm(predichos~Precios)
+data_frame(predichos,Precios) %>% ggplot(aes(x = Precios, y = predichos)) + geom_point(alpha = 0.7) + geom_smooth(method = "lm",formula = y~x,col = "red") + geom_abline(slope = 1, intercept = 0, colour = "green", size = 1) + labs(x = "Precio real", y = "Precio predicho", title = "Precio de nuestro mejor ajuste y precio real")
+```
+
+En este grafico podemos observar la distribucion de las observaciones segun su precio real y el precio predicho por el ajuste, la recta roja indica el ajuste del precio predicho en funcion del precio real, es decir, es la recta que mejor representa la distribucion de puntos observada en el grafico, en cuanto a la recta verde, es la recta identidad, es decir donde el precio predicho es igual al precio real, lo que se consideraria un ajuste ideal a nuestros datos. Como se puede apreciar, claramente no coinciden, como analiticamente vimos anteriormente, ya que tenemos un error promedio del 38% aproximadamente.
+
+```{r}
+datos_error <- data_frame(datos3$precio,mejor_ajuste$residuals)
+
+
+datos_error <- datos_error %>% rename(precio = `datos3$precio`, errores = `mejor_ajuste$residuals` ) %>%  mutate(color_grafico = ifelse(errores > -450,"steelblue","brown3"))
+
+
+datos_error %>% ggplot(aes(x = precio, y = errores, color = color_grafico)) + geom_point(alpha = 0.7) + labs(x = "Precio real", y = "Errores", title = " Errores del modelo segun el precio", color = "" ) +
+  scale_color_manual(labels = c("Outlier","Dato tipico"), values = c("brown3","steelblue"))
+```
+
+En este grafico podemos ver los errores de nuestro modelo en funcion del precio real, que es semejante al grafico visto anteriormente, aunque en este caso diferenciamos por color, ya que se pueden observar mejor 5 datos atipicos.
+Aqui observamos 5 outliers, que parecen estar afectando este modelo, haciendo que su eficiencia baje ¿Que tendran en comun estas observaciones?
+
+```{r}
+paged_table(datos3[c(1979,3472,13421,13494,13419),] %>% select(ocupantes,precio))
+
+
+```
+
+Podemos observar que todas tienen 16 ocupantes y 4 de las 5 poseen un precio relativamente bajo para la cantidad de personas que se pueden hospedar en esas propiedades, por lo que procederemos a volver a realizar este ajuste ,para ver como varia el PMAE, pero en este caso sin tener en cuenta dichas observaciones.
+
+```{r}
+datos3_sin_out <- datos3[-c(1979,3472,13421,13494,13419),]
+mejor_ajuste_no_out <- lm(as.formula(paste( "precio ~", variante_mejor_ajuste, sep='')),data=datos3_sin_out)
+
+datos_ajuste <- data_frame(a = c(crossval(datos3_sin_out,datos3_sin_out$precio,variante_mejor_ajuste),min(aux_todo)), b = c("Sin outliers", "Con outliers"))
+datos_ajuste %>% ggplot(mapping = aes(x = reorder(b,a), y = a))+ geom_col(fill = "steelblue") + labs(x = "", y = "PMAE", title = "PMAE segun contencion de outliers" ) + coord_flip() + geom_text(aes(label = round(a,5)), nudge_y = - 0.05, col = "white")
+
+```
+
+Podemos observar que no varia practicamente el considerar los 5 datos vistos como outliers en el error que va a tener el mejor ajuste considerado, a contrario de lo que uno podria haber pensado previamente, solo baja el error en un `r abs(round(datos_ajuste[1,1]-datos_ajuste[2,1],4))*100`%.
+
+# Clasificacion
+
+
+Pasaremos a clasificar el tipo de host (superhost o host). Notamos a partir del gráfico de correlación que parece haber una delimitación practicamente clara acerca de esta variable cuando se la grafica respecto al precio y al promedio de las reviews. Haremos un pequeño cambio y en vez de utilizar precio utilizamos precio_por_persona simplemente por intuición. Veremos en un principio ,con el gráfico, si el modelo de clasificación si efectivamente tiene sentido o no.
+
+Para comenzar, procederemos a cambiar el dataset, añadiendo las columnas de precio por persona (es decir el precio de la noche en la propiedad sobre la cantidad de ocupantes de la misma), y cambiar a false o true la variable de superhost
+
+
+```{r Clasificacion}
+
+datos_clasificacion <- datos3 %>% mutate(primer_review= as.numeric(primer_review))
+
+datos_clasificacion <- datos3 %>% mutate(precio_por_persona = precio / ocupantes )
+
+
+datos_clasificacion <- datos_clasificacion %>% mutate (superhost = case_when(superhost == FALSE ~ "Host",  superhost == TRUE ~ "Superhost"))
+
+```
+
+Luego veremos el grafico relacionando las variables anteriormente dichas para comenzar a entender como se relacionan con el objetivo de realizar la clasificacion.
+
+
+```{r warning=F, message=F}
+d <- datos_clasificacion %>% select(promedio_review, precio_por_persona, superhost)
+d %>% ggplot(mapping = aes(x = precio_por_persona, y = promedio_review, color = superhost )) + labs(x = "Precio por persona", y = "Promedio de reviews", color = "") +  geom_point() + geom_abline(slope = 1/914, intercept = 4.57 , size = 1) + geom_abline(slope = 0, intercept = 4.8, col = "green", size = 1) +xlim(0,300) + ylim(3.5,5)
+
+
+
+```
+
+Efectivamente se nota que hay dos cúmulos de puntos que si bien se interceptan y se encuentran muy estrechos, se puede intentar graficar una o dos líneas separadoras (mostradas en el grafico de color negro, o de color verde, dependiendo de cuan marcada es su pendiente) que aproximadamente los dividan de manera efectiva. 
+
+## Modelo de clasificacion K-Nearest Neighbors
+
+A continuación se intenta utilizar el método de clasificación utilizando k vecinos más cercanos utilizando estas dos variables.
+
+```{r}
+
+train<-datos_clasificacion %>% 
+  select(precio_por_persona, promedio_review, superhost)
+
+
+
+#  divido el dataset entre conjunto de entrenamiento y testeo
+
+N   <- nrow(train)
+p   <- 0.8
+ind <- sample(1:N, round(p*N), replace = F)
+
+d.train <-train[ind,] %>% select(-superhost)
+d.test  <- train[-ind,] %>% select(-superhost)
+
+d.train_superhost <- train[ind,3] 
+d.test_superhost  <- train[-ind,3] 
+
+ks<-seq(5,49,2)
+acu<-1:length(ks)
+
+
+for (i in 1:length(ks)) {
+  pr <- knn(d.train,d.test, d.train_superhost$superhost ,k=ks[i])
+  acu[i]<-accuracy_(pr, d.test_superhost$superhost )
+}
+
+k_optimo <- 4 + which.max(acu)*2-1
+
+data2 <- data_frame(ks = ks, acu = acu)
+data2 %>% ggplot(aes(x = ks, y = acu)) + geom_point() + theme_minimal() + scale_x_continuous(breaks = seq(5,49,2)) + labs(x = "Cantidad de vecinos", y = "Accuracy")
+
+```
+
+
+Pareciera que con el k óptimo (`r k_optimo`) utilizando estas dos variables se puede llegar a un accuracy aproximado del 70%  (`r max(acu)` ) lo cual a priori pareciera ser un buen modelo de clasificación, para estudiar esto en mayor profundidad, compararemos esto con otra clasificacion, esta vez, dada por arboles de decision.
+
+
+## Modelo de clasificacion usando arboles de decision
+
+Sin embargo a continuación utilizamos las mismas dos variables para clasificar pero a partir de árboles y descubrimos algo bastante interesante.
+
+
+```{r}
+#  divido el dataset entre conjunto de entrenamiento y testeo
+N   <- nrow(d)
+p   <- 0.8
+ind <- sample(1:N, round(p*N), replace = F)
+
+d.train <- d[ind,]
+d.test  <- d[-ind,]
+
+#armo el arbol de clasificación
+
+fit0 <- rpart(superhost ~ precio_por_persona + promedio_review, data = d.train, method = 'class')
+
+rpart.plot(fit0)
+```
+
+
+```{r Mapeo de la clasificacion}
+# 6. grafico el mapa de clasificación
+
+d.plot <- expand_grid(precio_por_persona = seq(0,250,10) , promedio_review = seq(3.5, 5,0.1) ) %>% 
+  mutate(superhost = predict(fit0, newdata = ., type = "class"))
+
+ggplot(data = d.plot, aes(x = precio_por_persona, y = promedio_review, fill = superhost, color = superhost)) + 
+  geom_tile() + 
+  geom_point(data = d.test) +
+  theme_classic()
+```
+
+
+```{r Matriz de confusion}
+# 6. calculo la matriz de confusión y el error de predicción para cada modelo
+d.test$superhost.pred.0 <- predict(fit0, newdata = d.test, type = "class")
+
+conf.mat.0 <- table(d.test$superhost.pred.0, d.test$superhost)
+
+acierto <- 100 * sum(diag(conf.mat.0)) / sum(conf.mat.0)
+
+conf.mat.0
+
+```
+
+El accuracy de este ultimo modelo es de `r round(acierto,2)`
+
+Primero que nada se puede observar ya en el árbol de decisión que en ningún momento se utiliza la variable precio_por_persona para clasificar. Además en el mapa de clasificación se puede observar que la única división es una recta cerca del 4.8 del promedio de reviews que divide en dos a los cúmulos de puntos. Esto parece estar diciendo que en sí el precio no afecta en absoluto a la clasificación que utiliza el modelo.   
+De hecho a continuación se muestra otro gráfico, esta vez del promedio de reviews en función la primera fecha de reviews y la división es muy parecida.   
+
+
+Lo mismo se encontró para muchas otras variables que no vale la pena mostrar, pero en ninguna se encontro claramente una linea separadora que no fuera una recta paralela al eje x que corta al eje del promedio de reviews en 4.8.
+
+
+```{r warning=F}
+
+d <- datos_clasificacion %>% select(promedio_review, primer_review, superhost)
+d %>% ggplot(mapping = aes(x = primer_review, y = promedio_review, color = superhost )) + labs(x = "Fecha de primer review", y = "Promedio de reviews", color ="") +  geom_point() + geom_abline(slope = 0, intercept = 4.8,size = 1) + ylim(3.5,5)
+
+```
+
+Finalmente se muestra una clasificaión utilizando arboles de decisión únicamente del promedio de las reviews separando host de superhost. Es decir que el arbol de decisión únicamente distingue según el promedio de las reviews y nunca respecto de la otra variable. Para este árbol se muestra que el error es similar probando correcta nuestra suposición acerca de la relación entre el precio o el precio por persona con el hecho de ser o no ser Superhost. 
+
+
+
+```{r}
+train<-datos_clasificacion %>% 
+  select(promedio_review, superhost)
+
+#  divido el dataset entre conjunto de entrenamiento y testeo
+N   <- nrow(d)
+p   <- 0.8
+ind <- sample(1:N, round(p*N), replace = F)
+
+d.train <- d[ind,]
+d.test  <- d[-ind,]
+
+#armo el arbol de clasificación
+
+fit0 <- rpart(superhost ~ promedio_review, data = d.train, method = 'class')
+
+rpart.plot(fit0)
+
+d.test$superhost.pred.0 <- predict(fit0, newdata = d.test, type = "class")
+
+conf.mat.0 <- table(d.test$superhost.pred.0, d.test$superhost)
+
+acierto <- 100 * sum(diag(conf.mat.0)) / sum(conf.mat.0)
+
+
+```
+
+El accuracy de este ultimo modelo es de `r round(acierto,2)`
+
+## Conclusiones sacadas a partir de la clasificacion
+
+Vale la pena mencionar que intrigados por la curiosidad efectivamente buscamos como se determinaba en la app si un host era efectivamente superhost o no y encontramos algo bastante llamativo.  
+
+
+
+Encontramos que un superhost se determinaba por 4 condiciones:  
+* hay que tener un índice de respuestas mayor al 90% en las últimas 24 horas  
+* hay que tener un índice de cancelaciones menor al 1%  
+* hay que tener más de 100 noches distribuidas en al menos 3 estadías completadas  
+* hay que tener un promedio de las reviews del último año mayor al 4.8  
+
+Efectivamente esta última condición es la que se esta encontrando en el ajuste de clasificación. Sin embargo es importante notar que en el caso de nuestro dataset no tenemos un promedio de reviews del último año sino un promedio de las reviews total. Lo que podría significa que si tenemos un 70% de acierto efectivo utilizando únicamente el promedio general entonces aproximadamente el 70% de los hosts se mantuvieron en el último año en la misma división del promedio de reviews desde 2010 (es decir abajo de 4.8 o encima de 4.8).  
+
+Por otro lado tambien se encontró que a pesar de que tenemos datos en el dataset relacionados al indice de respuestas y al indice de cancelaciones los gráficos muestran lo mismo que el gráfico de primer review junto con promedio de reviews. Simplemente no parecen ser tan deterministas sobre cómo se selecciona un superhost (a diferencia del promedio de reviews). Nuevamente para cada respuesta surge una nueva pregunta y es que esto podría ser una muestra clara de que si bien es necesario tener un indice de respuesta mayor al 90% en lás últimas 24 horas, tal vez esto no es algo que efectivamente se fije la app cada 24 horas sino una vez por mes por ejemplo. O algo totalmente distinto que parece tener más sentido es que tanto el indice de respuestas como el indice de cancelaciones no se mantiene tan bien en el tiempo como sí lo hace el promedio de las reviews. Pero ya para intentar probar estas hipotesis se necesitarían más datos distribuidos a lo largo del tiempo y esta es una varibale que no tenemos (únicamenre tenemos la fecha de la primera review).  
+
+
+# Conclusiones finales
+
+Como conclusión final se puede decir en primer lugar que se lograron responder hasta cierta medida las preguntas iniciales y se puedieron encontrar relaciones interesantes en las variables del dataset. Por ejemplo los modelos de clasificación lineal encontraron relaciones estrechas entre algunas de las variables y el precio de los hospedajes y luego con un analisis extra se encontraron relaciones con el hecho de ser o no ser un superhost en la app de AirBnB.    
+
+Por otro lado tiene que quedar claro que queda bastante aún sin responder, tanto porque no es lo suficientemente extenso el dataset como por una cuestión limitada de recursos a utilizar a lo largo de este trabajo. Una de las preguntas que quedan luego de este analisis para plantear es por ejemplo si se pueden encontrar relaciones entre las reviews y el precio de las propiedades si se tuviera una mejor distribución de los promedios de las reviews. En consecuencia,  ¿por qué se tiene esta distribución?. ¿Acaso todos los hospedajes de París son increiblemenete buenos en comparación al resto del mundo? o ¿será que AirBnB esta ocultando información?  o tal vez simplemente los usuarios tienden únicmaente a calificar positivamente.  
+Por otro lado queda también pendiente un analisis teniendo más datos temporales para poder determinar con mayor precisión lo planteado anteriormente.  
+Todo esto queda como preguntas abiertas que no se pudieron resolver con los datos presentes en este dataset.  
+
