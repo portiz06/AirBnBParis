@@ -17,10 +17,10 @@ This analysis aims to provide valuable insights into Airbnb properties in Paris,
 Researchers, analysts, and stakeholders interested in the Airbnb ecosystem, particularly in Paris, can leverage the insights and methodologies presented in this analysis for informed decision-making, policy formulation, and further research endeavors.
 
 ### Repository Structure:
-Data: Contains the dataset sourced from Inside Airbnb.
-Notebooks: Includes R markdown code detailing the analysis process, methodology, and findings.
-Visualizations: Stores visual representations generated during the analysis, aiding in comprehension and presentation.
-Documentation: Houses supplementary documents such as this README to provide context, instructions, and insights into the project.
++ Data: Contains the dataset sourced from Inside Airbnb.
++ Notebooks: Includes R markdown code detailing the analysis process, methodology, and findings.
++ Visualizations: Stores visual representations generated during the analysis, aiding in comprehension and presentation.
++ Documentation: Houses supplementary documents such as this README to provide context, instructions, and insights into the project.
 
 ### Future Directions:
 Potential future directions for this project include advanced modeling techniques, predictive analytics, natural language processing, and deeper dives into specific aspects of Airbnb property dynamics in Paris. Additionally, incorporating external datasets or exploring temporal trends could further enrich the analysis and its implications.
